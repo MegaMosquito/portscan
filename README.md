@@ -1,4 +1,4 @@
-# portscan -- an IP LAN host discovery tool
+# portscan -- a TCP port listener discovery tool
 
 This code creates a Docker container that provides a basic REST service that
 checks for TCP/IP listeners on IP hosts. Three APIs are provided for:
