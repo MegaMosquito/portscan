@@ -6,8 +6,8 @@
 FROM ubuntu:latest
 
 # Install required stuff
-RUN apt update && apt install -y python3 python3-pip
-RUN pip3 install flask waitress
+RUN apt update && apt install -y python3 python3-pip avahi-utils
+RUN pip3 install flask waitress requests
 
 # Setup a workspace directory
 RUN mkdir /portscan
@@ -20,5 +20,6 @@ WORKDIR /portscan
 COPY ./portscan.py /portscan
 
 # Start up the daemon process
-CMD python3 portscan.py >/dev/null 2>&1
+#CMD python3 portscan.py >/dev/null 2>&1
+CMD python3 portscan.py
 
