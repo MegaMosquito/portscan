@@ -20,17 +20,20 @@ from flask import Flask
 from flask import send_file
 from waitress import serve
 
+
 # Basic debug printing
 DEBUG_THREADS    = False
 DEBUG_WORKERS    = False
-DEBUG_INPUT      = True
-DEBUG_HOSTS      = True
+DEBUG_INPUT      = False
+DEBUG_AGEING     = False
+DEBUG_HOSTS      = False
 DEBUG_PORTS      = False
 DEBUG_CHECK_PORT = False
 def debug (flag, s):
   if flag:
     print(s)
     sys.stdout.flush()
+
 
 # Get values from the environment or use defaults
 def get_from_env(v, d):
@@ -43,16 +46,19 @@ MY_REST_API_BASE_URL   = get_from_env('MY_REST_API_BASE_URL', 'portscan')
 MY_CONTAINER_BIND_PORT = int(get_from_env('MY_CONTAINER_BIND_PORT', '80'))
 MY_NUM_THREADS         = int(get_from_env('MY_NUM_THREADS', '50'))
 
+
 # Configuration constants
 TIME_FORMAT = '%Y-%m-%d %H:%M:%S'
 SOCKET_CONNECT_TIMEOUT_SEC = 5
 PORTSCANNER_SLEEP_MSEC = 1000
 MANAGER_SLEEP_MSEC = 1000
 CACHE_DIRECTORY = '/cache'
-CACHE_EXPIRY_SEC = 60*60*24*2 # Expire cache entries after 2 days
+CACHE_EXPIRY_SEC = 60*60*24*7 # Expire cache entries after 7 days
+
 
 # REST API details
 webapp = Flask('portscan')
+
 
 def check_host_port (ipv4, port):
   try:
@@ -81,6 +87,7 @@ def check_host_port (ipv4, port):
     return { 'error': 'Received return code: ' + str(e) }
   # NOT REACHED
 
+
 def portworker (n, ipv4, ports, results):
   debug(DEBUG_WORKERS, f'    --> STARTING port worker thread #{n}.')
   while True:
@@ -105,6 +112,7 @@ def portworker (n, ipv4, ports, results):
 #    except Exception as e:
 #      logging.exception(f'EXCEPTION: {e}.')
     time.sleep(0.1)
+
 
 def record (mac, ipv4, results, times, utc_now):
 
@@ -153,6 +161,7 @@ def record (mac, ipv4, results, times, utc_now):
   n = f.write(json_output)
   f.close()
   
+
 def portscanner (input):
   debug(DEBUG_THREADS, f'STARTING the (never ending) portscanner thread.')
   while True:
@@ -210,6 +219,7 @@ def portscanner (input):
     debug(DEBUG_THREADS, f'Port scanner thread sleeping for {PORTSCANNER_SLEEP_MSEC / 1000.0} seconds...')
     time.sleep(PORTSCANNER_SLEEP_MSEC / 1000.0)
 
+
 def manager (input):
   debug(DEBUG_THREADS, f'STARTING the (never ending) manager thread.')
   while True:
@@ -223,16 +233,18 @@ def manager (input):
     # Add any not-already-cached nodes into the input queue
     if 'scan' in snapshot_json:
       count = len(snapshot_json['scan'])
-      debug(DEBUG_INPUT, f'ADDING {count} nodes to the "input" queue.')
+      debug(DEBUG_INPUT, f'FILLING "input" queue with up to {count} nodes...')
+      count = 0
       for node in snapshot_json['scan']:
         # Force uppercase for all MACs
         node['mac'] = node['mac'].upper()
         filepath = CACHE_DIRECTORY + '/' + node['mac']
         if not os.path.exists(filepath):
           debug(DEBUG_INPUT, f'ADDING ({node["ipv4"]},{node["mac"]}) to the "input" queue.')
+          count += 1
           input.put(node, block=True)
-    debug(DEBUG_INPUT, f'FILLED the input queue.')
-    # Wait for that queue to empty
+    debug(DEBUG_INPUT, f'DONE filling the input queue. Added {count} nodes.')
+    # Wait for the "input" queue to empty
     while not input.empty():
       debug(DEBUG_INPUT, f'WAITING for the input queue to empty.')
       time.sleep(60)
@@ -240,6 +252,7 @@ def manager (input):
     # Clean the cache of any stale entries
     utc_now = datetime.now(timezone.utc)
     macs = os.listdir(CACHE_DIRECTORY)
+    debug(DEBUG_AGEING, f'REMOVING nodes older than {CACHE_EXPIRY_SEC} seconds.')
     for mac in macs:
       filepath = CACHE_DIRECTORY + '/' + mac
       try:
@@ -252,6 +265,7 @@ def manager (input):
         utc_then = datetime.strptime(when, TIME_FORMAT)
         utc_then = utc_then.replace(tzinfo=timezone.utc)
         age_sec = (utc_now - utc_then).total_seconds()
+        debug(DEBUG_AGEING, f'--> {mac} is {age_sec:0.0f} seconds old.')
         if age_sec > CACHE_EXPIRY_SEC:
           debug(DEBUG_INPUT, f'SCHEDULING scan for {mac}.')
           input.put(node, block=True)
@@ -261,13 +275,15 @@ def manager (input):
     debug(DEBUG_THREADS, f'Manager thread sleeping for {MANAGER_SLEEP_MSEC / 1000.0} seconds...')
     time.sleep(MANAGER_SLEEP_MSEC / 1000.0)
 
-# Request to **IMMEDIATELY** scan a specific port on a specific host
+
+# Request to **IMMEDIATELY** scan a specific port on a specific host, anywhere
 # GET: (base URL)/<ipv4>/<port>/json
 @webapp.route('/' + MY_REST_API_BASE_URL + '/<ipv4>/<port>/json', methods=['GET'])
 def immediate_port_check (ipv4, port):
   return check_host_port(ipv4, port)
 
-# Request to retrieve all **CACHED** results from a specific host
+
+# Request to retrieve all **CACHED** results from a specific host on this LAN
 # GET: (base URL)/<mac>/json
 @webapp.route('/' + MY_REST_API_BASE_URL + '/<mac>/json', methods=['GET'])
 def get_cached_host_scan (mac):
@@ -280,7 +296,8 @@ def get_cached_host_scan (mac):
   except FileNotFoundError:
     return '{"error":"host not found"}'
 
-# Request to retrieve MAC addresses of all hosts with **CACHED** results
+
+# Request to retrieve MAC addresses of all LAN hosts with **CACHED** results
 # GET: (base URL)/json
 @webapp.route('/' + MY_REST_API_BASE_URL + '/json', methods=['GET'])
 def get_cached_host_list ():
@@ -292,6 +309,7 @@ def get_cached_host_list ():
   json_output += ']}\n'
   return json_output
 
+
 # Prevent caching on all requests
 @webapp.after_request
 def add_header(r):
@@ -300,6 +318,7 @@ def add_header(r):
   r.headers["Expires"] = "0"
   r.headers['Cache-Control'] = 'public, max-age=0'
   return r
+
 
 # Main program (instantiates and starts polling thread and then web server)
 if __name__ == '__main__':
