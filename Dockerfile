@@ -20,6 +20,5 @@ WORKDIR /portscan
 COPY ./portscan.py /portscan
 
 # Start up the daemon process
-#CMD python3 portscan.py >/dev/null 2>&1
 CMD python3 portscan.py
 
